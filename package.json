@@ -1,0 +1,23 @@
+{
+  "name": "matter-mcp",
+  "version": "1.0.0",
+  "description": "Matter specification MCP server with FTS5 search",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "build-index": "node dist/build-index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "better-sqlite3": "^12.6.2",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "@types/pdf-parse": "^1.1.0",
+    "typescript": "^5.9.3"
+  }
+}

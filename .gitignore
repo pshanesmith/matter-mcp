@@ -1,0 +1,23 @@
+# Generated index
+matter_index.db
+
+# Spec PDFs — do not redistribute copyrighted specification documents
+pdfs/
+
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+
+# Claude Code
+.claude/
+
+# macOS
+.DS_Store
