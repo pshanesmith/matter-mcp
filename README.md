@@ -34,7 +34,10 @@ cd matter-mcp
 npm install
 ```
 
-### 2. Place spec PDFs
+### 2. Download and place spec PDFs
+
+Download the Matter specification PDFs from the CSA:
+**https://csa-iot.org/developer-resource/specifications-download-request/**
 
 Create a `pdfs/` subdirectory and copy in your Matter spec PDFs:
 
