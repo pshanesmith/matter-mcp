@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chunkText, detectSection } from './build-index.js';
+import { chunkText, detectSection } from '../src/build-index.js';
 
 // ─── detectSection ────────────────────────────────────────────────────────────
 

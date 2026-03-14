@@ -7,7 +7,7 @@ import {
   fts5EscapeQuery,
   fts5Search,
   normativeSearch,
-} from './search.js';
+} from '../src/search.js';
 
 // ─── fts5EscapeQuery ──────────────────────────────────────────────────────────
 
