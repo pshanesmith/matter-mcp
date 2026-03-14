@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /**
  * build-index.ts
  *
@@ -10,21 +11,24 @@
  *   node dist/build-index.js [--pdf-dir /path/to/pdfs] [--db /path/to/db]
  */
 
-import Database from 'better-sqlite3';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
 
 const require = createRequire(import.meta.url);
-const pdfParse = require('pdf-parse') as (buffer: Buffer, options?: Record<string, unknown>) => Promise<{ numpages: number; text: string }>;
+const pdfParse = require('pdf-parse') as (
+  buffer: Buffer,
+  options?: Record<string, unknown>,
+) => Promise<{ numpages: number; text: string }>;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const CHUNK_SIZE = 1200;
-const CHUNK_OVERLAP = 200;
+const CHUNK_SIZE = parseInt(process.env.MATTER_CHUNK_SIZE ?? '1200', 10);
+const CHUNK_OVERLAP = parseInt(process.env.MATTER_CHUNK_OVERLAP ?? '200', 10);
 
 const PDF_KEY_PATTERNS: Record<string, string> = {
   core: 'core',
@@ -76,8 +80,11 @@ async function extractPages(pdfPath: string): Promise<PageData[]> {
   const pages: PageData[] = [];
 
   await pdfParse(buffer, {
+    // biome-ignore lint/suspicious/noExplicitAny: pdf-parse has no typed callback API
     pagerender: (pageData: any) =>
+      // biome-ignore lint/suspicious/noExplicitAny: untyped pdf.js text content
       pageData.getTextContent().then((tc: any) => {
+        // biome-ignore lint/suspicious/noExplicitAny: untyped pdf.js text item
         const raw = tc.items.map((item: any) => item.str).join(' ');
         // Normalize whitespace: collapse runs of spaces/tabs, reduce excess newlines
         const text = raw
@@ -92,13 +99,17 @@ async function extractPages(pdfPath: string): Promise<PageData[]> {
   return pages;
 }
 
-function detectSection(text: string): string | null {
+export function detectSection(text: string): string | null {
   const match = SECTION_RE.exec(text.slice(0, 300));
   if (match) return `${match[1]} ${match[2].trim()}`;
   return null;
 }
 
-function chunkText(text: string, chunkSize = CHUNK_SIZE, overlap = CHUNK_OVERLAP): string[] {
+export function chunkText(
+  text: string,
+  chunkSize = CHUNK_SIZE,
+  overlap = CHUNK_OVERLAP,
+): string[] {
   if (text.length <= chunkSize) return [text];
 
   const chunks: string[] = [];
@@ -111,10 +122,11 @@ function chunkText(text: string, chunkSize = CHUNK_SIZE, overlap = CHUNK_OVERLAP
 
     if (current.length + para.length + 2 > chunkSize && current) {
       chunks.push(current.trim());
-      const overlapText = current.length > overlap ? current.slice(-overlap) : current;
-      current = overlapText + '\n\n' + para;
+      const overlapText =
+        current.length > overlap ? current.slice(-overlap) : current;
+      current = `${overlapText}\n\n${para}`;
     } else {
-      current = current ? current + '\n\n' + para : para;
+      current = current ? `${current}\n\n${para}` : para;
     }
   }
 
@@ -124,17 +136,25 @@ function chunkText(text: string, chunkSize = CHUNK_SIZE, overlap = CHUNK_OVERLAP
 
 // ─── Indexing ─────────────────────────────────────────────────────────────────
 
-async function indexPdf(db: Database.Database, docKey: string, pdfPath: string): Promise<number> {
-  const filename = pdfPath.split('/').pop()!;
+async function indexPdf(
+  db: Database.Database,
+  docKey: string,
+  pdfPath: string,
+): Promise<number> {
+  const filename = pdfPath.split('/').pop() ?? pdfPath;
   console.log(`  Indexing ${filename}...`);
 
   const pages = await extractPages(pdfPath);
   console.log(`    Extracted ${pages.length} pages`);
 
-  const insert = db.prepare('INSERT INTO chunks_fts (doc_key, page, section, content) VALUES (?, ?, ?, ?)');
-  const insertMany = db.transaction((rows: Array<[string, number, string | null, string]>) => {
-    for (const row of rows) insert.run(...row);
-  });
+  const insert = db.prepare(
+    'INSERT INTO chunks_fts (doc_key, page, section, content) VALUES (?, ?, ?, ?)',
+  );
+  const insertMany = db.transaction(
+    (rows: Array<[string, number, string | null, string]>) => {
+      for (const row of rows) insert.run(...row);
+    },
+  );
 
   let currentSection: string | null = null;
   const rows: Array<[string, number, string | null, string]> = [];
@@ -170,8 +190,8 @@ async function main(): Promise<void> {
   let allPdfs: string[];
   try {
     allPdfs = readdirSync(pdfDir)
-      .filter(f => f.toLowerCase().endsWith('.pdf'))
-      .map(f => join(pdfDir, f));
+      .filter((f) => f.toLowerCase().endsWith('.pdf'))
+      .map((f) => join(pdfDir, f));
   } catch {
     console.error(`ERROR: Cannot read PDF directory: ${pdfDir}`);
     process.exit(1);
@@ -179,17 +199,22 @@ async function main(): Promise<void> {
 
   const pdfFiles: Record<string, string> = {};
   for (const [docKey, pattern] of Object.entries(PDF_KEY_PATTERNS)) {
-    const match = allPdfs.find(p => p.toLowerCase().includes(pattern));
+    const match = allPdfs.find((p) => p.toLowerCase().includes(pattern));
     if (match) {
       pdfFiles[docKey] = match;
     } else {
-      console.warn(`WARNING: No PDF found matching '${pattern}' for doc_key '${docKey}'`);
+      console.warn(
+        `WARNING: No PDF found matching '${pattern}' for doc_key '${docKey}'`,
+      );
     }
   }
 
   if (Object.keys(pdfFiles).length === 0) {
     console.error(`ERROR: No matching PDFs found in ${pdfDir}`);
-    console.error('Expected PDFs with filenames containing: ' + Object.values(PDF_KEY_PATTERNS).join(', '));
+    console.error(
+      'Expected PDFs with filenames containing: ' +
+        Object.values(PDF_KEY_PATTERNS).join(', '),
+    );
     process.exit(1);
   }
 
@@ -204,16 +229,29 @@ async function main(): Promise<void> {
 
   let grandTotal = 0;
   for (const [docKey, pdfPath] of Object.entries(pdfFiles)) {
-    grandTotal += await indexPdf(db, docKey, pdfPath);
+    try {
+      grandTotal += await indexPdf(db, docKey, pdfPath);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `ERROR: Failed to index ${pdfPath.split('/').pop()}: ${msg}`,
+      );
+      console.error('  Skipping this PDF and continuing with remaining files.');
+    }
   }
 
   db.close();
-  console.log(`\n✅ Done! ${grandTotal.toLocaleString()} chunks indexed across ${Object.keys(pdfFiles).length} document(s) → ${dbPath}`);
+  console.log(
+    `\n✅ Done! ${grandTotal.toLocaleString()} chunks indexed across ${Object.keys(pdfFiles).length} document(s) → ${dbPath}`,
+  );
   console.log('\nYou can now start the MCP server:');
   console.log('  npm start');
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// Only run when executed directly, not when imported for testing
+if (typeof process.env.VITEST === 'undefined') {
+  main().catch((err) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}

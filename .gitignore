@@ -16,6 +16,9 @@ node_modules/
 # Logs
 npm-debug.log*
 
+# Coverage
+coverage/
+
 # Claude Code
 .claude/
 

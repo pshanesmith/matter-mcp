@@ -7,7 +7,11 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "build-index": "node dist/build-index.js"
+    "build-index": "node dist/build-index.js",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --write src/",
+    "format": "biome format --write src/",
+    "test": "vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
@@ -15,9 +19,11 @@
     "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.7",
     "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^22.0.0",
     "@types/pdf-parse": "^1.1.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   }
 }

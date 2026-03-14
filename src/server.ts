@@ -1,3 +1,6 @@
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -5,10 +8,18 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import Database from 'better-sqlite3';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { fts5Search, normativeSearch, formatResults, dbReady } from './search.js';
+import {
+  dbReady,
+  formatResults,
+  fts5Search,
+  normativeSearch,
+} from './search.js';
+
+const DEBUG = process.env.MATTER_DEBUG === '1';
+
+function log(msg: string): void {
+  if (DEBUG) process.stderr.write(`[matter-mcp:server] ${msg}\n`);
+}
 
 const require = createRequire(import.meta.url);
 
@@ -57,13 +68,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           query: {
             type: 'string',
-            description: "Natural language question or keyword search. E.g. 'mandatory attributes for Door Lock cluster', 'commissioning flow BLE', 'OTA update requestor SHALL'",
+            description:
+              "Natural language question or keyword search. E.g. 'mandatory attributes for Door Lock cluster', 'commissioning flow BLE', 'OTA update requestor SHALL'",
             minLength: 2,
             maxLength: 500,
           },
           doc: {
             type: 'string',
-            description: "Limit search to one spec document. One of: 'core', 'clusters', 'devices', 'namespaces'. Omit to search all.",
+            description:
+              "Limit search to one spec document. One of: 'core', 'clusters', 'devices', 'namespaces'. Omit to search all.",
             enum: ['core', 'clusters', 'devices', 'namespaces'],
           },
           top_k: {
@@ -99,14 +112,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           cluster_name: {
             type: 'string',
-            description: "Matter cluster name. E.g. 'Door Lock', 'On/Off', 'Thermostat', 'Basic Information', 'OTA Software Update Requestor'",
+            description:
+              "Matter cluster name. E.g. 'Door Lock', 'On/Off', 'Thermostat', 'Basic Information', 'OTA Software Update Requestor'",
             minLength: 2,
             maxLength: 100,
           },
           aspect: {
             type: 'string',
-            description: "Specific aspect to focus on: 'attributes', 'commands', 'events', 'feature_map', 'constraints', 'access'. Omit for full overview.",
-            enum: ['attributes', 'commands', 'events', 'feature_map', 'constraints', 'access'],
+            description:
+              "Specific aspect to focus on: 'attributes', 'commands', 'events', 'feature_map', 'constraints', 'access'. Omit for full overview.",
+            enum: [
+              'attributes',
+              'commands',
+              'events',
+              'feature_map',
+              'constraints',
+              'access',
+            ],
           },
         },
         required: ['cluster_name'],
@@ -132,7 +154,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           device_type: {
             type: 'string',
-            description: "Matter device type. E.g. 'Door Lock', 'Dimmable Light', 'Thermostat', 'Bridge', 'Generic Switch'",
+            description:
+              "Matter device type. E.g. 'Door Lock', 'Dimmable Light', 'Thermostat', 'Bridge', 'Generic Switch'",
             minLength: 2,
             maxLength: 100,
           },
@@ -161,7 +184,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           query: {
             type: 'string',
-            description: "Semantic tag namespace or tag name. E.g. 'Common Area', 'Landmark', 'Closure', 'kitchen', 'Switches'",
+            description:
+              "Semantic tag namespace or tag name. E.g. 'Common Area', 'Landmark', 'Closure', 'kitchen', 'Switches'",
             minLength: 1,
             maxLength: 100,
           },
@@ -192,13 +216,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           query: {
             type: 'string',
-            description: "Natural language question or keyword search. E.g. 'mandatory attributes for Door Lock cluster', 'commissioning flow BLE', 'OTA update requestor SHALL'",
+            description:
+              "Natural language question or keyword search. E.g. 'mandatory attributes for Door Lock cluster', 'commissioning flow BLE', 'OTA update requestor SHALL'",
             minLength: 2,
             maxLength: 500,
           },
           doc: {
             type: 'string',
-            description: "Limit search to one spec document. One of: 'core', 'clusters', 'devices', 'namespaces'. Omit to search all.",
+            description:
+              "Limit search to one spec document. One of: 'core', 'clusters', 'devices', 'namespaces'. Omit to search all.",
             enum: ['core', 'clusters', 'devices', 'namespaces'],
           },
           top_k: {
@@ -248,68 +274,147 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }));
 
+const VALID_DOCS = new Set(['core', 'clusters', 'devices', 'namespaces']);
+
+let dbReadyCache: boolean | null = null;
+
+function isDbReady(): boolean {
+  if (dbReadyCache !== null) return dbReadyCache;
+  dbReadyCache = dbReady(db);
+  return dbReadyCache;
+}
+
+/** Extract and validate a required string argument */
+function requireString(
+  args: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  const val = args?.[key];
+  if (typeof val !== 'string' || val.length === 0) {
+    throw new Error(`Missing or invalid required argument: '${key}'`);
+  }
+  return val;
+}
+
+/** Validate and clamp top_k to [1, 15] */
+function parseTopK(args: Record<string, unknown> | undefined): number {
+  const raw = (args?.top_k as number | undefined) ?? 5;
+  return Math.max(1, Math.min(15, raw));
+}
+
+/** Validate optional doc filter against known doc keys */
+function parseDocFilter(
+  args: Record<string, unknown> | undefined,
+): string | null {
+  const doc = (args?.doc as string | undefined) ?? null;
+  if (doc !== null && !VALID_DOCS.has(doc)) {
+    throw new Error(
+      `Invalid doc filter: '${doc}'. Must be one of: ${[...VALID_DOCS].join(', ')}`,
+    );
+  }
+  return doc;
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  log(`tool=${name} args=${JSON.stringify(args)}`);
 
   const notReady =
     '⚠️ Matter spec index not built yet.\n\nRun `npm run build-index` first to index the PDF specs.';
 
   switch (name) {
     case 'matter_search': {
-      if (!dbReady(db)) return { content: [{ type: 'text', text: notReady }] };
-      const query = args?.query as string;
-      const doc = (args?.doc as string | undefined) ?? null;
-      const topK = (args?.top_k as number | undefined) ?? 5;
+      if (!isDbReady()) return { content: [{ type: 'text', text: notReady }] };
+      const query = requireString(args, 'query');
+      const doc = parseDocFilter(args);
+      const topK = parseTopK(args);
       const results = fts5Search(query, doc, topK, db);
-      return { content: [{ type: 'text', text: formatResults(results, query) }] };
+      return {
+        content: [{ type: 'text', text: formatResults(results, query) }],
+      };
     }
 
     case 'matter_cluster_lookup': {
-      if (!dbReady(db)) return { content: [{ type: 'text', text: notReady }] };
-      const clusterName = args?.cluster_name as string;
+      if (!isDbReady()) return { content: [{ type: 'text', text: notReady }] };
+      const clusterName = requireString(args, 'cluster_name');
       const aspect = args?.aspect as string | undefined;
       const query = aspect ? `${clusterName} ${aspect}` : clusterName;
       const results = fts5Search(query, 'clusters', 8, db);
       const label = `Cluster: ${clusterName}${aspect ? ` [${aspect}]` : ''}`;
-      return { content: [{ type: 'text', text: formatResults(results, label) }] };
+      return {
+        content: [{ type: 'text', text: formatResults(results, label) }],
+      };
     }
 
     case 'matter_device_type_lookup': {
-      if (!dbReady(db)) return { content: [{ type: 'text', text: notReady }] };
-      const deviceType = args?.device_type as string;
+      if (!isDbReady()) return { content: [{ type: 'text', text: notReady }] };
+      const deviceType = requireString(args, 'device_type');
       const results = fts5Search(deviceType, 'devices', 6, db);
-      return { content: [{ type: 'text', text: formatResults(results, `Device Type: ${deviceType}`) }] };
+      return {
+        content: [
+          {
+            type: 'text',
+            text: formatResults(results, `Device Type: ${deviceType}`),
+          },
+        ],
+      };
     }
 
     case 'matter_tag_lookup': {
-      if (!dbReady(db)) return { content: [{ type: 'text', text: notReady }] };
-      const query = args?.query as string;
+      if (!isDbReady()) return { content: [{ type: 'text', text: notReady }] };
+      const query = requireString(args, 'query');
       const results = fts5Search(query, 'namespaces', 6, db);
-      return { content: [{ type: 'text', text: formatResults(results, `Tag: ${query}`) }] };
+      return {
+        content: [
+          { type: 'text', text: formatResults(results, `Tag: ${query}`) },
+        ],
+      };
     }
 
     case 'matter_normative_check': {
-      if (!dbReady(db)) return { content: [{ type: 'text', text: notReady }] };
-      const query = args?.query as string;
-      const doc = (args?.doc as string | undefined) ?? null;
-      const topK = (args?.top_k as number | undefined) ?? 5;
+      if (!isDbReady()) return { content: [{ type: 'text', text: notReady }] };
+      const query = requireString(args, 'query');
+      const doc = parseDocFilter(args);
+      const topK = parseTopK(args);
       const results = normativeSearch(query, doc, topK, db);
-      return { content: [{ type: 'text', text: formatResults(results, `Normative requirements: ${query}`) }] };
+      return {
+        content: [
+          {
+            type: 'text',
+            text: formatResults(results, `Normative requirements: ${query}`),
+          },
+        ],
+      };
     }
 
     case 'matter_index_status': {
       try {
-        const total = (db.prepare('SELECT COUNT(*) as n FROM chunks_fts').get() as { n: number }).n;
+        const total = (
+          db.prepare('SELECT COUNT(*) as n FROM chunks_fts').get() as {
+            n: number;
+          }
+        ).n;
         if (total === 0) {
-          return { content: [{ type: 'text', text: '❌ Index exists but is empty. Run `npm run build-index`.' }] };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: '❌ Index exists but is empty. Run `npm run build-index`.',
+              },
+            ],
+          };
         }
-        const lines = [`✅ Matter spec index ready — ${total.toLocaleString()} chunks indexed\n`];
+        const lines = [
+          `✅ Matter spec index ready — ${total.toLocaleString()} chunks indexed\n`,
+        ];
         const verbose = (args?.verbose as boolean | undefined) ?? false;
         if (verbose) {
           lines.push('**Per-document breakdown:**');
-          const rows = db.prepare(
-            'SELECT doc_key, COUNT(*) as cnt FROM chunks_fts GROUP BY doc_key',
-          ).all() as Array<{ doc_key: string; cnt: number }>;
+          const rows = db
+            .prepare(
+              'SELECT doc_key, COUNT(*) as cnt FROM chunks_fts GROUP BY doc_key',
+            )
+            .all() as Array<{ doc_key: string; cnt: number }>;
           for (const row of rows) {
             const label = SPEC_DOCS[row.doc_key] ?? row.doc_key;
             lines.push(`- ${label}: ${row.cnt.toLocaleString()} chunks`);
@@ -317,8 +422,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         lines.push(`\nIndex location: \`${DB_PATH}\``);
         return { content: [{ type: 'text', text: lines.join('\n') }] };
-      } catch (e) {
-        return { content: [{ type: 'text', text: `❌ Index not built. Run \`npm run build-index\`.\n\nExpected: ${DB_PATH}` }] };
+      } catch (_e) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `❌ Index not built. Run \`npm run build-index\`.\n\nExpected: ${DB_PATH}`,
+            },
+          ],
+        };
       }
     }
 
